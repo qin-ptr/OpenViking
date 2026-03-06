@@ -249,7 +249,7 @@ class AgentLoop:
                 model=self.model,
                 session_id=session_key.safe_name(),
             )
-            if  response.usage:
+            if response.usage:
                 cur_token = response.usage
                 self._token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
                 self._token_usage["completion_tokens"] += cur_token["completion_tokens"]
@@ -366,87 +366,131 @@ class AgentLoop:
         # Handle system messages (subagent announces)
         # The chat_id contains the original "channel:chat_id" to route back to
         start_time = time.time()
-        if msg.session_key.type == "system":
-            return await self._process_system_message(msg)
+        long_running_notified = False
 
-        preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
-        logger.info(f"Processing message from {msg.session_key}:{msg.sender_id}: {preview}")
+        # 监控处理时长，每5秒按顺序发不同表情提示
+        async def check_long_running():
+            nonlocal long_running_notified
+            # 飞书表情列表，按顺序发送不重复
+            EMOJIS = ["HOURGLASS", "COFFEE", "COOKING", "BENTO", "RUN", "WRENCH", "THUMBSUP"]
+            emoji_index = 0
 
-        # Get or create session
-        session_key = msg.session_key
-        # For CLI/direct sessions, skip heartbeat by default
-        skip_heartbeat = session_key.type == "cli"
-        session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
+            while not long_running_notified and emoji_index < len(EMOJIS):
+                await asyncio.sleep(5)
+                if long_running_notified:
+                    break
+                if msg.session_key.channel_id == "feishu" and msg.metadata:
+                    message_id = msg.metadata.get("message_id")
+                    if message_id:
+                        try:
+                            # 遍历找到飞书渠道实例添加反应
+                            for channel in self.config.channels:
+                                if channel.name == "feishu" and hasattr(channel, "_add_reaction"):
+                                    await channel._add_reaction(message_id, EMOJIS[emoji_index])
+                                    emoji_index += 1
+                                    break
+                        except Exception as e:
+                            logger.debug(f"Failed to add long running reaction: {e}")
 
-        # Handle slash commands
-        is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
-        if is_group_chat:
-            cmd = msg.content.replace(f"@{msg.sender_id}", "").strip().lower()
-        else:
-            cmd = msg.content.strip().lower()
-        if cmd == "/new":
-            await self._consolidate_memory(session, archive_all=True)
-            session.clear()
-            await self.sessions.save(session)
-            return OutboundMessage(
-                session_key=msg.session_key, content="🐈 New session started. Memory consolidated.",metadata=msg.metadata,
+        monitor_task = asyncio.create_task(check_long_running())
+
+        try:
+            if msg.session_key.type == "system":
+                return await self._process_system_message(msg)
+
+            preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
+            logger.info(f"Processing message from {msg.session_key}:{msg.sender_id}: {preview}")
+
+            # Get or create session
+            session_key = msg.session_key
+            # For CLI/direct sessions, skip heartbeat by default
+            skip_heartbeat = session_key.type == "cli"
+            session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
+
+            # Handle slash commands
+            is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
+            if is_group_chat:
+                cmd = msg.content.replace(f"@{msg.sender_id}", "").strip().lower()
+            else:
+                cmd = msg.content.strip().lower()
+            if cmd == "/new":
+                await self._consolidate_memory(session, archive_all=True)
+                session.clear()
+                await self.sessions.save(session)
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="🐈 New session started. Memory consolidated.",
+                    metadata=msg.metadata,
+                )
+            if cmd == "/help":
+                return OutboundMessage(
+                    session_key=msg.session_key,
+                    content="🐈 vikingbot commands:\n/new — Start a new conversation\n/help — Show available commands",
+                    metadata=msg.metadata,
+                )
+
+            # Consolidate memory before processing if session is too large
+            if len(session.messages) > self.memory_window:
+                await self._consolidate_memory(session)
+
+            if self.sandbox_manager:
+                message_workspace = self.sandbox_manager.get_workspace_path(session_key)
+            else:
+                message_workspace = self.workspace
+
+            from vikingbot.agent.context import ContextBuilder
+
+            message_context = ContextBuilder(
+                message_workspace,
+                sandbox_manager=self.sandbox_manager,
+                sender_id=msg.sender_id,
+                is_group_chat=is_group_chat,
+                eval=self._eval,
             )
-        if cmd == "/help":
+
+            # Build initial messages (use get_history for LLM-formatted messages)
+            messages = await message_context.build_messages(
+                history=session.get_history(),
+                current_message=msg.content,
+                media=msg.media if msg.media else None,
+                session_key=msg.session_key,
+            )
+
+            # Run agent loop
+            final_content, tools_used = await self._run_agent_loop(
+                messages=messages,
+                session_key=session_key,
+                publish_events=True,
+                sender_id=msg.sender_id,
+            )
+
+            # Log response preview
+            preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
+            logger.info(f"Response to {msg.session_key}: {preview}")
+
+            # Save to session (include tool names so consolidation sees what happened)
+            session.add_message("user", msg.content, sender_id=msg.sender_id)
+            session.add_message(
+                "assistant", final_content, tools_used=tools_used if tools_used else None
+            )
+            await self.sessions.save(session)
+
+            time_cost = round(time.time() - start_time, 2)
             return OutboundMessage(
                 session_key=msg.session_key,
-                content="🐈 vikingbot commands:\n/new — Start a new conversation\n/help — Show available commands", metadata=msg.metadata,
+                content=final_content,
+                metadata=msg.metadata,
+                token_usage=self._token_usage,
+                time_cost=time_cost
+                or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
             )
-
-        # Consolidate memory before processing if session is too large
-        if len(session.messages) > self.memory_window:
-            await self._consolidate_memory(session)
-
-        if self.sandbox_manager:
-            message_workspace = self.sandbox_manager.get_workspace_path(session_key)
-        else:
-            message_workspace = self.workspace
-
-        from vikingbot.agent.context import ContextBuilder
-        message_context = ContextBuilder(
-            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id, is_group_chat=is_group_chat, eval=self._eval
-        )
-
-        # Build initial messages (use get_history for LLM-formatted messages)
-        messages = await message_context.build_messages(
-            history=session.get_history(),
-            current_message=msg.content,
-            media=msg.media if msg.media else None,
-            session_key=msg.session_key,
-        )
-
-        # Run agent loop
-        final_content, tools_used = await self._run_agent_loop(
-            messages=messages,
-            session_key=session_key,
-            publish_events=True,
-            sender_id=msg.sender_id,
-        )
-
-        # Log response preview
-        preview = final_content[:300] + "..." if len(final_content) > 300 else final_content
-        logger.info(f"Response to {msg.session_key}: {preview}")
-
-        # Save to session (include tool names so consolidation sees what happened)
-        session.add_message("user", msg.content, sender_id=msg.sender_id)
-        session.add_message(
-            "assistant", final_content, tools_used=tools_used if tools_used else None
-        )
-        await self.sessions.save(session)
-
-        time_cost = round(time.time() - start_time, 2)
-        return OutboundMessage(
-            session_key=msg.session_key,
-            content=final_content,
-            metadata=msg.metadata,
-            token_usage=self._token_usage,
-            time_cost=time_cost
-            or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
-        )
+        finally:
+            long_running_notified = True
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
 
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
