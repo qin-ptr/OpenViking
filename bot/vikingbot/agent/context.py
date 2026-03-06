@@ -6,6 +6,8 @@ import platform
 from pathlib import Path
 from typing import Any
 from loguru import logger
+import time as _time
+from datetime import datetime
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
@@ -131,6 +133,16 @@ Skills with available="false" need dependencies installed first - you can try in
 
 {skills_summary}""")
 
+        # Viking user profile
+        start = _time.time()
+        profile = await self.memory.get_viking_user_profile(
+            workspace_id=workspace_id, user_id=self._sender_id
+        )
+        cost = round(_time.time() - start, 2)
+        logger.info(f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}")
+        if profile:
+            parts.append(f"## Current user's information\n{profile}")
+
         return "\n\n---\n\n".join(parts)
 
     async def _build_user_memory(
@@ -146,32 +158,21 @@ Skills with available="false" need dependencies installed first - you can try in
             Complete system prompt.
         """
         parts = []
-        import time as _time
-        from datetime import datetime
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"
         parts.append(f"## Current Time: {now} ({tz})")
 
         workspace_id = self.sandbox_manager.to_workspace_id(session_key)
-        # Viking user profile
-        start = _time.time()
-        profile = await self.memory.get_viking_user_profile(
-            workspace_id=workspace_id, user_id=self._sender_id
-        )
-        cost = round(_time.time() - start, 2)
-        logger.info(f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}")
-        if profile:
-            parts.append(f"## Current user's information\n{profile}")
 
         # Viking agent memory
-        # start = _time.time()
-        # viking_memory = await self.memory.get_viking_memory_context(
-        #     current_message=current_message, workspace_id=workspace_id
-        # )
-        # cost = round(_time.time() - start, 2)
-        # logger.info(f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}")
-        # if viking_memory:
-        #     parts.append(f"## Your memories about the current conversation. If you need to know more details, please use the tools.\n{viking_memory}")
+        start = _time.time()
+        viking_memory = await self.memory.get_viking_memory_context(
+            current_message=current_message, workspace_id=workspace_id
+        )
+        cost = round(_time.time() - start, 2)
+        logger.info(f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}")
+        if viking_memory:
+            parts.append(f"## Your memories about the current conversation. If you need to know more details, please use the tools.\n{viking_memory}")
 
         return "\n\n---\n\n".join(parts)
 
