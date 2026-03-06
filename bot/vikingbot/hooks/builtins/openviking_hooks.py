@@ -58,10 +58,10 @@ class OpenVikingCompactHook(Hook):
 
         try:
             allow_from = self._get_channel_allow_from(session_id)
-            filtered_messages = self._filter_messages_by_sender(
-                vikingbot_session.messages, allow_from
-            )
-
+            # filtered_messages = self._filter_messages_by_sender(
+            #     vikingbot_session.messages, allow_from
+            # )
+            filtered_messages = vikingbot_session.messages
             if not filtered_messages:
                 logger.info(
                     f"No messages to commit openviking for session {session_id} (allow_from filter applied)"
@@ -95,6 +95,7 @@ class OpenVikingPostCallHook(Hook):
         ov_client = await self._get_client(workspace_id)
         config = load_config()
         openviking_config = config.ov_server
+        print(f'openviking_config.mode={openviking_config.mode}')
         if not skill_name:
             return ""
         try:
@@ -105,7 +106,9 @@ class OpenVikingPostCallHook(Hook):
                 skill_memory_uri = (
                     f"viking://agent/{agent_space_name}/memories/skills/{skill_name}.md"
                 )
+            print(f'skill_memory_uri={skill_memory_uri}')
             content = await ov_client.read_content(skill_memory_uri, level="read")
+            print(f'content={content}')
             # logger.warning(f"content={content}")
             return f"\n\n---\n## Skill Memory\n{content}" if content else ""
         except Exception as e:
