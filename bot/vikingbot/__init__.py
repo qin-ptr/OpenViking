@@ -3,7 +3,7 @@ vikingbot - A lightweight AI agent framework
 """
 import warnings
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 __logo__ = "🐈"
 
 # Suppress RequestsDependencyWarning from requests module
