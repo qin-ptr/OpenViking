@@ -27,6 +27,8 @@ class VikingClient:
             self.admin_user_id = "default"
             self._apikey_manager = None
         else:
+            if agent_id and "#" in agent_id:
+                agent_id = agent_id.split("#", 1)[0]
             self.client = ov.AsyncHTTPClient(
                 url=openviking_config.server_url,
                 api_key=openviking_config.root_api_key,

@@ -203,13 +203,14 @@ class VikingAddResourceTool(OVFileTool):
                 if not local_path.is_file():
                     return f"Error: Not a file: {path}"
 
-            client = await self._get_client(tool_context)
+            client = await VikingClient.create(tool_context.workspace_id)
             result = await client.add_resource(
                 path, description
             )
 
+            await client.close()
             if result:
-                root_uri = result.get("result", {}).get("root_uri", "unknown")
+                root_uri = result.get("root_uri", "")
                 return f"Successfully added resource: {root_uri}"
             else:
                 return "Failed to add resource"
