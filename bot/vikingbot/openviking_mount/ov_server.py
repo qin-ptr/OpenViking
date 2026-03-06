@@ -103,7 +103,7 @@ class VikingClient:
         self, local_path: str, desc: str
     ) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
-        result = await self.client.add_resource(path=local_path, target=viking_resource_prefix, reason=desc, wait=False)
+        result = await self.client.add_resource(path=local_path, reason=desc, wait=False)
         return result
 
     async def list_resources(
