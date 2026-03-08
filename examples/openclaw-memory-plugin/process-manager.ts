@@ -125,6 +125,9 @@ export async function quickRecallPrecheck(
     if (localProcess && (localProcess.killed || localProcess.exitCode !== null || localProcess.signalCode !== null)) {
       return { ok: false, reason: "local process is not running" };
     }
+    if (localProcess === null) {
+      return { ok: true };
+    }
   }
   return { ok: false, reason: "health check failed" };
 }
