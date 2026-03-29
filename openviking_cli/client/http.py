@@ -552,6 +552,36 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        regenerate_semantics: bool = True,
+        revectorize: bool = True,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file."""
+        telemetry = self._validate_telemetry(telemetry)
+        uri = VikingURI.normalize(uri)
+        response = await self._http.post(
+            "/api/v1/content/write",
+            json={
+                "uri": uri,
+                "content": content,
+                "mode": mode,
+                "regenerate_semantics": regenerate_semantics,
+                "revectorize": revectorize,
+                "wait": wait,
+                "timeout": timeout,
+                "telemetry": telemetry,
+            },
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result") or {}, response_data)
+
     # ============= Search =============
 
     async def find(

@@ -133,6 +133,21 @@ class BaseClient(ABC):
         """Read L1 overview (.overview.md)."""
         ...
 
+    @abstractmethod
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        regenerate_semantics: bool = True,
+        revectorize: bool = True,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file."""
+        ...
+
     # ============= Search =============
 
     @abstractmethod

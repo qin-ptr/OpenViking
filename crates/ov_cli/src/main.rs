@@ -321,6 +321,32 @@ enum Commands {
         /// Viking URI
         uri: String,
     },
+    /// Write text content to an existing file
+    Write {
+        /// Viking URI
+        uri: String,
+        /// Content to write
+        #[arg(long, conflicts_with = "from_file")]
+        content: Option<String>,
+        /// Read content from a local file
+        #[arg(long = "from-file", conflicts_with = "content")]
+        from_file: Option<String>,
+        /// Append instead of replacing the file
+        #[arg(long)]
+        append: bool,
+        /// Skip parent semantic regeneration
+        #[arg(long = "no-semantics")]
+        no_semantics: bool,
+        /// Skip vector re-embedding
+        #[arg(long = "no-vectorize")]
+        no_vectorize: bool,
+        /// Wait for async processing to finish
+        #[arg(long, default_value = "false")]
+        wait: bool,
+        /// Optional wait timeout in seconds
+        #[arg(long)]
+        timeout: Option<f64>,
+    },
     /// Reindex content at URI (regenerates .abstract.md and .overview.md)
     Reindex {
         /// Viking URI
@@ -745,6 +771,27 @@ async fn main() {
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
+        Commands::Write {
+            uri,
+            content,
+            from_file,
+            append,
+            no_semantics,
+            no_vectorize,
+            wait,
+            timeout,
+        } => handle_write(
+            uri,
+            content,
+            from_file,
+            append,
+            no_semantics,
+            no_vectorize,
+            wait,
+            timeout,
+            ctx,
+        )
+        .await,
         Commands::Reindex {
             uri,
             regenerate,
@@ -1178,6 +1225,39 @@ async fn handle_abstract(uri: String, ctx: CliContext) -> Result<()> {
 async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_write(
+    uri: String,
+    content: Option<String>,
+    from_file: Option<String>,
+    append: bool,
+    no_semantics: bool,
+    no_vectorize: bool,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    let payload = match (content, from_file) {
+        (Some(value), None) => value,
+        (None, Some(path)) => std::fs::read_to_string(path)
+            .map_err(|e| Error::Client(format!("Failed to read --from-file: {}", e)))?,
+        _ => return Err(Error::Client("Specify exactly one of --content or --from-file".into())),
+    };
+    commands::content::write(
+        &client,
+        &uri,
+        &payload,
+        append,
+        no_semantics,
+        no_vectorize,
+        wait,
+        timeout,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {

@@ -4,7 +4,6 @@ use serde_json::Value;
 use std::fs::File;
 use std::path::Path;
 use tempfile::{Builder, NamedTempFile};
-use url::Url;
 use zip::CompressionMethod;
 use zip::write::FileOptions;
 
@@ -312,6 +311,28 @@ impl HttpClient {
     pub async fn overview(&self, uri: &str) -> Result<String> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/content/overview", &params).await
+    }
+
+    pub async fn write(
+        &self,
+        uri: &str,
+        content: &str,
+        mode: &str,
+        regenerate_semantics: bool,
+        revectorize: bool,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+            "content": content,
+            "mode": mode,
+            "regenerate_semantics": regenerate_semantics,
+            "revectorize": revectorize,
+            "wait": wait,
+            "timeout": timeout,
+        });
+        self.post("/api/v1/content/write", &body).await
     }
 
     pub async fn reindex(

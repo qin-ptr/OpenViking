@@ -330,6 +330,31 @@ class SyncHTTPClient:
         """Read L1 overview."""
         return run_async(self._async_client.overview(uri))
 
+    def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        regenerate_semantics: bool = True,
+        revectorize: bool = True,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file."""
+        return run_async(
+            self._async_client.write(
+                uri=uri,
+                content=content,
+                mode=mode,
+                regenerate_semantics=regenerate_semantics,
+                revectorize=revectorize,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
     # ============= Relations =============
 
     def relations(self, uri: str) -> List[Dict[str, Any]]:

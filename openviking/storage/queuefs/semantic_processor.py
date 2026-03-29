@@ -412,6 +412,8 @@ class SemanticProcessor(DequeueHandlerBase):
             entries = await viking_fs.ls(dir_uri, ctx=ctx)
         except Exception as e:
             logger.warning(f"Failed to list memory directory {dir_uri}: {e}")
+            if msg.lifecycle_lock_handle_id:
+                await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
 
         file_paths: List[str] = []
@@ -425,6 +427,8 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if not file_paths:
             logger.info(f"No memory files found in {dir_uri}")
+            if msg.lifecycle_lock_handle_id:
+                await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
 
         file_summaries: List[Dict[str, str]] = []
@@ -497,17 +501,34 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
         except Exception as e:
             logger.error(f"Failed to write abstract/overview for {dir_uri}: {e}")
+            if msg.lifecycle_lock_handle_id:
+                await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
             return
 
-        await self._vectorize_directory(
-            uri=dir_uri,
-            context_type="memory",
-            abstract=abstract,
-            overview=overview,
-            ctx=ctx,
-            semantic_msg_id=msg.id,
-        )
-        logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
+        try:
+            await self._vectorize_directory(
+                uri=dir_uri,
+                context_type="memory",
+                abstract=abstract,
+                overview=overview,
+                ctx=ctx,
+                semantic_msg_id=msg.id,
+            )
+            logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
+        finally:
+            if msg.lifecycle_lock_handle_id:
+                await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
+
+    async def _release_memory_lifecycle_lock(self, handle_id: str) -> None:
+        """Release a lifecycle lock held by in-place memory refresh."""
+        try:
+            from openviking.storage.transaction import get_lock_manager
+
+            handle = get_lock_manager().get_handle(handle_id)
+            if handle:
+                await get_lock_manager().release(handle)
+        except Exception as e:
+            logger.warning(f"[SemanticProcessor] Failed to release memory lifecycle lock: {e}")
 
     async def _sync_topdown_recursive(
         self,

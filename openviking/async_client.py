@@ -373,6 +373,30 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.read(uri, offset=offset, limit=limit)
 
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        regenerate_semantics: bool = True,
+        revectorize: bool = True,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Write text content to an existing file."""
+        await self._ensure_initialized()
+        return await self._client.write(
+            uri=uri,
+            content=content,
+            mode=mode,
+            regenerate_semantics=regenerate_semantics,
+            revectorize=revectorize,
+            wait=wait,
+            timeout=timeout,
+            telemetry=telemetry,
+        )
+
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.

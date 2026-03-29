@@ -9,6 +9,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.service.content_write_coordinator import ContentWriteCoordinator
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import get_logger
@@ -185,3 +186,28 @@ class FSService:
         """Read file as raw bytes."""
         viking_fs = self._ensure_initialized()
         return await viking_fs.read_file_bytes(uri, ctx=ctx)
+
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        ctx: RequestContext,
+        mode: str = "replace",
+        regenerate_semantics: bool = True,
+        revectorize: bool = True,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Write to an existing file and optionally refresh semantics/vectors."""
+        viking_fs = self._ensure_initialized()
+        coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+        return await coordinator.write(
+            uri=uri,
+            content=content,
+            ctx=ctx,
+            mode=mode,
+            regenerate_semantics=regenerate_semantics,
+            revectorize=revectorize,
+            wait=wait,
+            timeout=timeout,
+        )

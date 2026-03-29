@@ -7,12 +7,14 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.telemetry import run_operation
+from openviking.telemetry import TelemetryRequest
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -26,6 +28,21 @@ class ReindexRequest(BaseModel):
     uri: str
     regenerate: bool = False
     wait: bool = True
+
+
+class WriteContentRequest(BaseModel):
+    """Request to write or append text content to an existing file."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    content: str
+    mode: str = "replace"
+    regenerate_semantics: bool = True
+    revectorize: bool = True
+    wait: bool = False
+    timeout: float | None = None
+    telemetry: TelemetryRequest = False
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
@@ -103,6 +120,34 @@ async def download(
         media_type="application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
     )
+
+
+@router.post("/write")
+async def write(
+    request: WriteContentRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Write text content to an existing file."""
+    service = get_service()
+    execution = await run_operation(
+        operation="content.write",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.write(
+            uri=request.uri,
+            content=request.content,
+            ctx=_ctx,
+            mode=request.mode,
+            regenerate_semantics=request.regenerate_semantics,
+            revectorize=request.revectorize,
+            wait=request.wait,
+            timeout=request.timeout,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
 
 
 @router.post("/reindex")
