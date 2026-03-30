@@ -116,6 +116,26 @@ class PathLock:
         lock_owner, _, _ = _parse_fencing_token(token)
         return lock_owner == owner_id
 
+    async def _owned_lock_type(self, path: str, owner: LockOwner) -> Optional[str]:
+        lock_path = self._get_lock_path(path)
+        if lock_path not in owner.locks:
+            return None
+        token = self._read_token(lock_path)
+        if token is None:
+            return None
+        lock_owner, _, lock_type = _parse_fencing_token(token)
+        if lock_owner != owner.id:
+            return None
+        return lock_type
+
+    async def _has_owned_ancestor_subtree(self, path: str, owner: LockOwner) -> bool:
+        current = path.rstrip("/")
+        while current:
+            if await self._owned_lock_type(current, owner) == LOCK_TYPE_SUBTREE:
+                return True
+            current = self._get_parent_path(current) or ""
+        return False
+
     async def _remove_lock_file(self, lock_path: str) -> bool:
         try:
             self._agfs.rm(lock_path)
@@ -174,12 +194,22 @@ class PathLock:
             logger.warning(f"Failed to scan descendants of {path}: {e}")
         return None
 
-    async def acquire_point(self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0) -> bool:
+    async def acquire_point(
+        self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0
+    ) -> bool:
         owner_id = owner.id
         lock_path = self._get_lock_path(path)
+        owned_lock_type = await self._owned_lock_type(path, owner)
+        if owned_lock_type in {LOCK_TYPE_POINT, LOCK_TYPE_SUBTREE}:
+            owner.add_lock(lock_path)
+            logger.debug(f"[POINT] Reusing owned lock on: {path}")
+            return True
+        if await self._has_owned_ancestor_subtree(path, owner):
+            logger.debug(f"[POINT] Reusing owned ancestor SUBTREE lock on: {path}")
+            return True
         if timeout is None:
             # 无限等待
-            deadline = float('inf')
+            deadline = float("inf")
         else:
             # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
@@ -255,12 +285,22 @@ class PathLock:
             logger.debug(f"[POINT] Lock acquired: {lock_path}")
             return True
 
-    async def acquire_subtree(self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0) -> bool:
+    async def acquire_subtree(
+        self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0
+    ) -> bool:
         owner_id = owner.id
         lock_path = self._get_lock_path(path)
+        owned_lock_type = await self._owned_lock_type(path, owner)
+        if owned_lock_type == LOCK_TYPE_SUBTREE:
+            owner.add_lock(lock_path)
+            logger.debug(f"[SUBTREE] Reusing owned SUBTREE lock on: {path}")
+            return True
+        if await self._has_owned_ancestor_subtree(path, owner):
+            logger.debug(f"[SUBTREE] Reusing owned ancestor SUBTREE lock on: {path}")
+            return True
         if timeout is None:
             # 无限等待
-            deadline = float('inf')
+            deadline = float("inf")
         else:
             # 有限超时
             deadline = asyncio.get_running_loop().time() + timeout
@@ -419,3 +459,12 @@ class PathLock:
             owner.remove_lock(lock_path)
 
         logger.debug(f"Released {lock_count} locks for owner {owner.id}")
+
+    async def release_selected(self, owner: LockOwner, lock_paths: list[str]) -> None:
+        for lock_path in reversed(lock_paths):
+            if lock_path not in owner.locks:
+                continue
+            if not await self._verify_lock_ownership(lock_path, owner.id):
+                continue
+            await self._remove_lock_file(lock_path)
+            owner.remove_lock(lock_path)

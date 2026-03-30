@@ -334,3 +334,53 @@ class TestPathLockBehavior:
         ok2_retry = await lock.acquire_subtree(target, tx2, timeout=3.0)
         assert ok2_retry is True
         await lock.release(tx2)
+
+    async def test_point_reuses_same_owner_subtree_lock_on_same_path(self, agfs_client, test_dir):
+        lock = PathLock(agfs_client)
+        tx = LockHandle(id="tx-reentrant-same-path")
+
+        ok = await lock.acquire_subtree(test_dir, tx, timeout=3.0)
+        assert ok is True
+
+        lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
+        before = agfs_client.cat(lock_path)
+        before_token = before.decode("utf-8") if isinstance(before, bytes) else before
+        assert ":S" in before_token
+
+        ok_reuse = await lock.acquire_point(test_dir, tx, timeout=0.5)
+        assert ok_reuse is True
+
+        after = agfs_client.cat(lock_path)
+        after_token = after.decode("utf-8") if isinstance(after, bytes) else after
+        assert after_token == before_token
+        assert ":S" in after_token
+
+        await lock.release(tx)
+
+    async def test_point_under_same_owner_subtree_does_not_create_child_lock(
+        self, agfs_client, test_dir
+    ):
+        import uuid as _uuid
+
+        child = f"{test_dir}/child-reentrant-{_uuid.uuid4().hex}"
+        agfs_client.mkdir(child)
+
+        lock = PathLock(agfs_client)
+        tx = LockHandle(id="tx-reentrant-child")
+
+        ok = await lock.acquire_subtree(test_dir, tx, timeout=3.0)
+        assert ok is True
+
+        ok_child = await lock.acquire_point(child, tx, timeout=0.5)
+        assert ok_child is True
+
+        child_lock_path = f"{child}/{LOCK_FILE_NAME}"
+        try:
+            agfs_client.stat(child_lock_path)
+            raise AssertionError("child lock should not be created when ancestor subtree is owned")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+        await lock.release(tx)

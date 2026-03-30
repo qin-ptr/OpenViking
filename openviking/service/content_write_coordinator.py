@@ -8,6 +8,7 @@ import os
 from typing import Any, Dict, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.transaction import get_lock_manager
 from openviking.storage.viking_fs import VikingFS
@@ -99,6 +100,7 @@ class ContentWriteCoordinator:
             )
 
         temp_root_uri = ""
+        lock_transferred = False
         try:
             temp_root_uri, temp_target_uri = await self._prepare_temp_write(
                 uri=normalized_uri,
@@ -116,6 +118,7 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 lifecycle_lock_handle_id=handle.id,
             )
+            lock_transferred = True
             queue_status = await self._wait_for_queues(timeout=timeout) if wait else None
             return {
                 "uri": normalized_uri,
@@ -128,12 +131,13 @@ class ContentWriteCoordinator:
                 "queue_status": queue_status,
             }
         except Exception:
-            if temp_root_uri:
+            if not lock_transferred and temp_root_uri:
                 try:
                     await self._viking_fs.delete_temp(temp_root_uri, ctx=ctx)
                 except Exception:
                     logger.debug("Failed to clean temp tree after write failure", exc_info=True)
-            await lock_manager.release(handle)
+            if not lock_transferred:
+                await lock_manager.release(handle)
             raise
 
     def _validate_mode(self, mode: str) -> None:
@@ -166,7 +170,14 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
     ) -> None:
         if mode == "append":
-            await self._viking_fs.append_file(uri, content, ctx=ctx)
+            existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+            existing_content, metadata = deserialize_full(existing_raw)
+            updated_content = existing_content + content
+            if metadata:
+                updated_raw = serialize_with_metadata(updated_content, metadata)
+            else:
+                updated_raw = updated_content
+            await self._viking_fs.write_file(uri, updated_raw, ctx=ctx)
             return
         await self._viking_fs.write_file(uri, content, ctx=ctx)
 
@@ -323,6 +334,7 @@ class ContentWriteCoordinator:
             await lock_manager.release(handle)
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
+        lock_transferred = False
         try:
             await self._write_in_place(uri, content, mode=mode, ctx=ctx)
             if revectorize:
@@ -334,6 +346,7 @@ class ContentWriteCoordinator:
                 ctx=ctx,
                 lifecycle_lock_handle_id=handle.id,
             )
+            lock_transferred = True
             queue_status = await self._wait_for_queues(timeout=timeout) if wait else None
             return {
                 "uri": uri,
@@ -346,7 +359,8 @@ class ContentWriteCoordinator:
                 "queue_status": queue_status,
             }
         except Exception:
-            await lock_manager.release(handle)
+            if not lock_transferred:
+                await lock_manager.release(handle)
             raise
 
     async def _resolve_root_uri(self, uri: str, *, ctx: RequestContext) -> str:

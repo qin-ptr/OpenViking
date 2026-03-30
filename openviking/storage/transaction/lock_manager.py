@@ -160,6 +160,9 @@ class LockManager:
         await self._path_lock.release(handle)
         self._handles.pop(handle.id, None)
 
+    async def release_selected(self, handle: LockHandle, lock_paths: List[str]) -> None:
+        await self._path_lock.release_selected(handle, lock_paths)
+
     async def _stale_cleanup_loop(self) -> None:
         """Check and release leaked handles every 60 s (in-process safety net)."""
         while self._running:

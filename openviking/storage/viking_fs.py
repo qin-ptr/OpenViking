@@ -33,6 +33,7 @@ from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
+    from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import RerankConfig
 
@@ -358,7 +359,11 @@ class VikingFS:
         self.agfs.mkdir(path)
 
     async def rm(
-        self, uri: str, recursive: bool = False, ctx: Optional[RequestContext] = None
+        self,
+        uri: str,
+        recursive: bool = False,
+        ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index.
 
@@ -397,7 +402,12 @@ class VikingFS:
             lock_mode = "point"
 
         try:
-            async with LockContext(get_lock_manager(), lock_paths, lock_mode=lock_mode):
+            async with LockContext(
+                get_lock_manager(),
+                lock_paths,
+                lock_mode=lock_mode,
+                handle=lock_handle,
+            ):
                 uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
                 uris_to_delete.append(target_uri)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
@@ -411,6 +421,7 @@ class VikingFS:
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> Dict[str, Any]:
         """Move file/directory + recursively update vector index.
 
@@ -441,6 +452,7 @@ class VikingFS:
             lock_mode="mv",
             mv_dst_parent_path=dst_parent,
             src_is_dir=is_dir,
+            handle=lock_handle,
         ):
             uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
             uris_to_move.append(target_uri)
@@ -1409,6 +1421,7 @@ class VikingFS:
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
@@ -1451,6 +1464,7 @@ class VikingFS:
                 lock_mode="mv",
                 mv_dst_parent_path=dst_parent,
                 src_is_dir=True,
+                handle=lock_handle,
             ):
                 await self._update_vector_store_uris(
                     uris=[old_dir],

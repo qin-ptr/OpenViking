@@ -125,6 +125,7 @@ class SemanticDagExecutor:
                     self._target_uri,
                     ctx=self._ctx,
                     file_change_status=self._file_change_status,
+                    lifecycle_lock_handle_id=self._lifecycle_lock_handle_id,
                 )
                 logger.info(
                     f"[SyncDiff] Diff computed: "
