@@ -162,6 +162,15 @@ def create_app(
 
     validate_server_config(config)
 
+    def _configure_session_tool_outputs(service_obj) -> None:  # noqa: ANN001
+        sessions = getattr(service_obj, "sessions", None)
+        setter = getattr(sessions, "set_tool_output_externalization_config", None)
+        if callable(setter):
+            setter(config.tool_output_externalization)
+
+    if service is not None:
+        _configure_session_tool_outputs(service)
+
     async def _deferred_init(service, app, config):
         """Run heavy initialization in background after server starts accepting requests."""
         await service.initialize()
@@ -211,6 +220,7 @@ def create_app(
             service = OpenVikingService()
 
         assert service is not None
+        _configure_session_tool_outputs(service)
         set_service(service)
 
         from openviking.metrics.global_api import (
