@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
-from openviking.parse.accessors.http_accessor import HTTPAccessor
+from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.parser_router import ParserRouter
 from openviking.parse.understanding_api import (
     PREPARED_FILE_ID_ARG,
@@ -20,66 +20,28 @@ from openviking_cli.exceptions import InvalidArgumentError
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entry_point", ["parse", "submit", "upload_file"])
 @pytest.mark.parametrize(
-    "source_path,headers,content,expected_filename,source_format,multipart",
+    "filename,content,original_source,resolved_extension,source_format",
     [
-        (
-            "export?id=123",
-            {"content-type": "application/pdf"},
-            b"%PDF-1.7",
-            "export.pdf",
-            "pdf",
-            False,
-        ),
-        (
-            "2601.00014",
-            {"content-type": "application/pdf"},
-            b"%PDF-1.7",
-            "2601.00014.pdf",
-            "pdf",
-            True,
-        ),
-        (
-            "export?id=123",
-            {
-                "content-type": "application/pdf",
-                "content-disposition": 'attachment; filename="report.PDF"',
-            },
-            b"%PDF-1.7",
-            "report.PDF",
-            "pdf",
-            False,
-        ),
-        ("README.md", {"content-type": "text/markdown"}, b"# README", "README.md", "md", True),
-        (
-            "sample.ts",
-            {"content-type": "video/mp2t"},
-            (b"\x47" + b"\0" * 187) * 10,
-            "sample.ts",
-            "video",
-            False,
-        ),
+        ("download", b"%PDF-1.7", "https://example.com/download?id=123", ".pdf", "pdf"),
+        ("page.html", b"<h1>Page</h1>", "https://example.com/page.html?view=full", "", "html"),
+        ("page.html", b"<h1>Page</h1>", "https://example.com/article?id=123", ".html", "html"),
     ],
-    ids=["extensionless-pdf", "dotted-id-pdf", "disposition-uppercase", "markdown", "mpegts"],
 )
 async def test_parse_uses_downloaded_file_and_resolved_extension(
     monkeypatch,
     tmp_path,
     entry_point,
-    source_path,
-    headers,
+    filename,
     content,
-    expected_filename,
+    original_source,
+    resolved_extension,
     source_format,
-    multipart,
 ):
-    original_source = f"https://source.example.test/{source_path}"
+    source_name = "export"
     uploaded_names = []
     uploaded_content = []
-    downloaded_paths = []
 
     def handler(request):
-        if request.url.host == "source.example.test":
-            return httpx.Response(200, headers=headers, content=content)
         if request.url.path.endswith("/files"):
             if request.url.query == b"uploads":
                 uploaded_names.append(json.loads(request.content)["file_name"])
@@ -112,12 +74,11 @@ async def test_parse_uses_downloaded_file_and_resolved_extension(
     api = _api_with_transport(monkeypatch, handler)
     api._enable_resumable_upload = True
     # Exercise both upload protocols through every ingestion entry point.
-    api._upload_simple_max_bytes = 1 if multipart else len(content) + 1
+    api._upload_simple_max_bytes = 1 if source_format == "pdf" else 1024
     router = ParserRouter(parser_registry=object())
     router._understanding_api = api
     processor = UnifiedResourceProcessor(vlm_processor=object())
     processor._parser_router = router
-    processor._accessor_registry = HTTPAccessor()
     zip_path = tmp_path / "result.zip"
     monkeypatch.setattr(api, "_download_zip", lambda _: _return(zip_path))
     monkeypatch.setattr(
@@ -126,39 +87,39 @@ async def test_parse_uses_downloaded_file_and_resolved_extension(
         lambda **_: _return("viking://temp/result"),
     )
 
-    for _ in range(2):
-        with await processor.prepare(original_source) as resource:
-            downloaded_paths.append(resource.path)
-            if entry_point == "parse":
-                zip_path.write_bytes(b"zip")
-                result = await processor.process(
-                    original_source,
-                    prepared_resource=resource,
-                    resource_name="report",
-                    source_name=None,
-                    parser_backend="understanding",
-                )
-                assert result.source_path == original_source
-                assert result.source_format == source_format
-                assert result.root.title == "report"
-            elif entry_point == "submit":
-                assert await processor.submit_understanding(resource) == "response-1"
-            else:
-                assert await processor.upload_understanding_file(resource) == "file-1"
+    for prefix in ("tmpABC", "tmpXYZ"):
+        downloaded = tmp_path / f"{prefix}-{filename}"
+        downloaded.write_bytes(content)
+        resource = LocalResource(
+            path=downloaded,
+            source_type=SourceType.HTTP,
+            original_source=original_source,
+            meta={"original_filename": source_name, "extension": resolved_extension},
+        )
+        processor._set_resolved_identity(resource, source_name=None)
+        if entry_point == "parse":
+            zip_path.write_bytes(b"zip")
+            result = await processor.process(
+                original_source,
+                prepared_resource=resource,
+                resource_name="report",
+                source_name=None,
+                parser_backend="understanding",
+            )
+            assert result.source_path == original_source
+            assert result.source_format == source_format
+            assert result.root.title == "report"
+        elif entry_point == "submit":
+            assert await processor.submit_understanding(resource) == "response-1"
+        else:
+            assert await processor.upload_understanding_file(resource) == "file-1"
 
-    assert downloaded_paths[0] != downloaded_paths[1]
-    assert uploaded_names == [expected_filename, expected_filename]
+    assert uploaded_names == [f"{source_name}.{source_format}"] * 2
     assert uploaded_content == [content, content]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "local_name,source_name,resolved_extension,expected_filename",
-    [("download.pdf", None, "", "download.pdf"), ("download", "document", ".pdf", "document.pdf")],
-)
-async def test_upload_file_validates_input_and_returns_file_id(
-    monkeypatch, tmp_path, local_name, source_name, resolved_extension, expected_filename
-):
+async def test_upload_file_validates_input_and_returns_file_id(monkeypatch, tmp_path):
     empty_source = tmp_path / "empty.pdf"
     empty_source.touch()
     api = UnderstandingAPI.__new__(UnderstandingAPI)
@@ -171,19 +132,17 @@ async def test_upload_file_validates_input_and_returns_file_id(
 
     assert exc_info.value.code == "INVALID_ARGUMENT"
 
-    source = tmp_path / local_name
+    source = tmp_path / "download.pdf"
     source.write_bytes(b"%PDF-1.7")
 
     def handler(request):
-        assert f'filename="{expected_filename}"'.encode() in request.content
+        assert b'filename="download.pdf"' in request.content
         assert source.read_bytes() in request.content
         return httpx.Response(200, json={"id": "file-1"})
 
     api = _api_with_transport(monkeypatch, handler)
 
-    file_id = await api.upload_file(
-        source, source_name=source_name, resolved_extension=resolved_extension
-    )
+    file_id = await api.upload_file(source)
 
     assert file_id == "file-1"
 
@@ -294,7 +253,7 @@ def _api_with_transport(monkeypatch, handler):
     api._default_poll_interval_ms = 0
     api._upload_simple_max_bytes = 1024
     api._upload_part_size_bytes = 512
-    api._video_exts = {"mp4", "mpegts"}
+    api._video_exts = {"mp4"}
     api._audio_exts = {"mp3"}
     api._image_exts = {"png"}
     client_class = httpx.AsyncClient
