@@ -379,10 +379,6 @@ class _AccessMixin:
                 resource=normalized_uri,
             )
         if parts == ["agent"]:
-            # Parity with _ensure_supported_write_namespace, which forbids the
-            # account-shared viking://agent root: deleting it would recursively
-            # wipe every account's agent skills/endpoints/tools/payments. Concrete
-            # sub-paths (viking://agent/skills/...) remain deletable.
             raise PermissionDeniedError(
                 "Deleting viking://agent root is not supported; use a concrete "
                 "agent sub-path (e.g. viking://agent/skills/...) instead.",
@@ -402,17 +398,11 @@ class _AccessMixin:
                 f"Writing {normalized_uri} is not supported; use user-owned namespaces instead.",
                 resource=normalized_uri,
             )
-        if parts and parts[0] == "agent":
-            if len(parts) >= 2 and parts[1] not in {"skills", "endpoints", "tools", "payments"}:
-                raise PermissionDeniedError(
-                    "viking://agent/{agent_id} is deprecated. Use viking://user/.../peers/{agent_id} instead.",
-                    resource=normalized_uri,
-                )
-            if len(parts) < 2:
-                raise PermissionDeniedError(
-                    "Writing to viking://agent root is not supported.",
-                    resource=normalized_uri,
-                )
+        if self._is_legacy_agent_id_uri(normalized_uri):
+            raise PermissionDeniedError(
+                "viking://agent/{agent_id} is deprecated. Use viking://user/.../peers/{agent_id} instead.",
+                resource=normalized_uri,
+            )
 
     def _pathlock_fs_ctx(
         self,
@@ -690,6 +680,7 @@ class _AccessMixin:
             and parts[0] == "agent"
             and len(parts) >= 2
             and parts[1] not in {"skills", "endpoints", "tools", "payments"}
+            and not (len(parts) == 2 and parts[1] in self._DIR_MARKER_LEVELS)
         )
 
     def _read_paths(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
