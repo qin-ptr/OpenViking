@@ -681,13 +681,12 @@ console.log(await client.reindex("viking://resources/docs/", {
 
 **Go SDK**
 
-When passing a non-`nil` `ReindexOptions`, set `Wait` explicitly. Go's zero
-value is `false`; only `opts=nil` applies the SDK default `wait=true`.
+With non-`nil` `ReindexOptions`, omitting `Wait` uses Go's zero value `false`;
+only `opts=nil` applies the SDK default `wait=true`.
 
 ```go
 result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
     Mode: "vectors_only",
-    Wait: false,
     Tags: []string{"team=search"},
     TagMode: "replace",
 })
@@ -700,7 +699,6 @@ fmt.Println(result["status"])
 ```go
 result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
     Mode: "prune_orphans",
-    Wait: false,
     DryRun: true,
 })
 if err != nil {
