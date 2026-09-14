@@ -242,7 +242,6 @@ result = client.write(
     uri="viking://resources/docs/api.md",
     content="# Updated API\n\nFresh content.",
     mode="replace",
-    wait=True,
     options={"tags": ["team=search", "env=prod"], "tag_mode": "replace"},
 )
 print(result["root_uri"])
@@ -252,7 +251,6 @@ print(result["root_uri"])
 
 ```typescript
 await client.write("viking://resources/docs/new.md", "# New document\n", {
-  wait: true,
   tags: ["team=search", "env=prod"],
   tagMode: "replace",
 });
@@ -267,7 +265,6 @@ result, err := client.Write(
     "# Updated API\n\nFresh content.",
     &openviking.WriteOptions{
         Mode: "replace",
-        Wait: true,
         Tags: []string{"team=search", "env=prod"},
         TagMode: "replace",
     },
@@ -292,7 +289,6 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
     "uri": "viking://resources/docs/api.md",
     "content": "# Updated API\n\nFresh content.",
     "mode": "replace",
-    "wait": true,
     "tags": ["team=search", "env=prod"],
     "tag_mode": "replace"
   }'
@@ -304,8 +300,7 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
 openviking write viking://resources/docs/api.md \
   --content "# Updated API\n\nFresh content." \
   --tags team=search,env=prod \
-  --tag-mode replace \
-  --wait
+  --tag-mode replace
 ```
 
 
@@ -392,7 +387,7 @@ result = client.batch_write(
             "mode": "upsert",
         },
     ],
-    wait=True,
+    wait=False,
 )
 ```
 
@@ -415,7 +410,7 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
         "mode": "upsert"
       }
     ],
-    "wait": true
+    "wait": false
   }'
 ```
 
@@ -648,7 +643,7 @@ Subtree reindex is not transactional. Records skipped because no semantic source
 result = client.reindex(
     uri="viking://resources",
     mode="vectors_only",
-    wait=True,
+    wait=False,
     options={
         "tags": ["team=search", "env=prod"],
         "tag_mode": "replace",
@@ -692,7 +687,7 @@ value is `false`; only `opts=nil` applies the SDK default `wait=true`.
 ```go
 result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
     Mode: "vectors_only",
-    Wait: true,
+    Wait: false,
     Tags: []string{"team=search"},
     TagMode: "replace",
 })
@@ -705,13 +700,13 @@ fmt.Println(result["status"])
 ```go
 result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
     Mode: "prune_orphans",
-    Wait: true,
+    Wait: false,
     DryRun: true,
 })
 if err != nil {
     return err
 }
-fmt.Println(result["would_delete_records"])
+fmt.Println(result["task_id"])
 ```
 
 **HTTP API**
@@ -730,7 +725,7 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
   -d '{
     "uri": "viking://resources",
     "mode": "vectors_only",
-    "wait": true,
+    "wait": false,
     "tags": ["team=search", "env=prod"],
     "tag_mode": "replace"
   }'
@@ -751,29 +746,6 @@ openviking reindex viking://user/default/skills --mode semantic_and_vectors --wa
 
 ```bash
 openviking reindex viking://resources --mode prune_orphans --dry-run
-```
-
-**Synchronous response (`wait=true`)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources",
-    "mode": "vectors_only",
-    "status": "completed",
-    "object_type": "resource",
-    "scanned_records": 120,
-    "rebuilt_records": 118,
-    "deleted_records": 0,
-    "would_delete_records": 0,
-    "unsupported_records": 2,
-    "failed_records": 0,
-    "duration_ms": 1284,
-    "warnings": []
-  },
-  "time": 0.1
-}
 ```
 
 **Asynchronous response (`wait=false`)**

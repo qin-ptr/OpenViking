@@ -559,7 +559,7 @@ client.rm(uri="viking://resources/old-project/", recursive=True)
 **TypeScript SDK**
 
 ```typescript
-await client.remove("viking://resources/docs/old.md", { wait: true });
+await client.remove("viking://resources/docs/old.md");
 ```
 
 **Go SDK**
