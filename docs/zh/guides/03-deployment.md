@@ -39,10 +39,6 @@ openviking-server --config /path/to/ov.conf
 ov health
 ```
 
-导入 SVG 需要 Cairo 系统库，官方 Docker 镜像已包含。通过 pip 或源码安装时，Debian/Ubuntu 执行 `sudo apt-get install libcairo2`，macOS 执行 `brew install cairo`；Windows 安装方式见 [CairoSVG 安装说明](https://cairosvg.org/documentation/#installation)。Python 转换包 CairoSVG 会随 OpenViking 一起安装。
-
-macOS 若安装 Cairo 后仍提示 `no library called "cairo"`，在启动服务的同一终端执行 `export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix cairo)/lib"`，让 Python 能找到 Homebrew 的动态库。
-
 ## 命令行选项
 
 | 选项 | 描述 | 默认值 |
