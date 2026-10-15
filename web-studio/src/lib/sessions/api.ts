@@ -9,7 +9,6 @@ import {
   postBotV1Chat,
   postSessions,
   postSessionIdCommit,
-  postSessionIdExtract,
   postSessionIdMessages,
 } from '#/gen/ov-client/sdk.gen'
 import {
@@ -343,14 +342,6 @@ export async function commitSession(
         keepRecentCount === undefined
           ? undefined
           : { keep_recent_count: keepRecentCount },
-      path: { session_id: sessionId },
-    }),
-  )
-}
-
-export async function extractSession(sessionId: string): Promise<unknown> {
-  return getOvResult<unknown>(
-    postSessionIdExtract({
       path: { session_id: sessionId },
     }),
   )

@@ -30,7 +30,6 @@ vi.mock('#/gen/ov-client/sdk.gen', () => ({
   postBotV1Chat: vi.fn(),
   postSessions: vi.fn(),
   postSessionIdCommit: vi.fn(),
-  postSessionIdExtract: vi.fn(),
   postSessionIdMessages: vi.fn(),
 }))
 
