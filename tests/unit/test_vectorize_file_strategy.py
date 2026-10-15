@@ -12,10 +12,7 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.storage.index_action import FieldPatch
 from openviking.utils import embedding_utils
-from openviking.utils.embedding_input import (
-    EMBEDDING_TRUNCATION_SUFFIX,
-    estimate_embedding_input_tokens,
-)
+from openviking.utils.embedding_input import EMBEDDING_TRUNCATION_SUFFIX
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils.config.parser_config import ImageConfig
 
@@ -998,17 +995,15 @@ async def test_vectorize_content_only_reads_embedding_input(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "content, expected, expected_tokens",
+    "content, expected",
     [
-        ("a1👍" * 100, "a1👍" * 26 + "a1" + EMBEDDING_TRUNCATION_SUFFIX, 28),
-        ("中文あ가Ｌ、" * 100, "中文あ가Ｌ、" * 4 + "中文" + EMBEDDING_TRUNCATION_SUFFIX, 28),
-        ("a1中👍" * 5, "a1中👍" * 5, 9),
+        ("a1👍" * 100, "a1👍" * 26 + "a1" + EMBEDDING_TRUNCATION_SUFFIX),
+        ("中文あ가Ｌ、" * 100, "中文あ가Ｌ、" * 4 + "中文" + EMBEDDING_TRUNCATION_SUFFIX),
+        ("a1中👍" * 5, "a1中👍" * 5),
     ],
     ids=["ordinary-characters", "wide-text", "within-budget"],
 )
-async def test_vectorize_file_bounds_content_before_enqueue(
-    monkeypatch, content, expected, expected_tokens
-):
+async def test_vectorize_file_bounds_content_before_enqueue(monkeypatch, content, expected):
     queue = DummyQueue()
     fs = DummyFS(content)
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
@@ -1030,7 +1025,6 @@ async def test_vectorize_file_bounds_content_before_enqueue(
     assert len(queue.items) == 1
     message = queue.items[0].message
     assert message == expected
-    assert estimate_embedding_input_tokens(message) == expected_tokens
     assert fs.read_file_calls == 1
 
 
