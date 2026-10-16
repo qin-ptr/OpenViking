@@ -237,35 +237,32 @@ async def test_task_result_redacts_user_key(tracker: TaskTracker):
     assert "user_key" not in json.dumps(retrieved.to_dict())
 
 
-async def test_fail_task(tracker: TaskTracker):
+async def test_fail_task(tracker: TaskTracker, monkeypatch):
     """A Phase-2 load failure must persist failure before acknowledging its queue work."""
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, Mock
 
-    from openviking.service.task_work_index import TaskWorkIndex
     from openviking.storage.queuefs.named_queue import NamedQueue
     from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
     from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 
-    task = await tracker.create("session_commit", resource_id="session-1", **_owner_kwargs())
-    index = TaskWorkIndex()
-    tracker.attach_work_index(index)
+    set_task_tracker(tracker)
+    task_id = "session-commit-1"
     backend = _FakeAgfs()
     session = SimpleNamespace(
         exists=AsyncMock(return_value=True),
         load=AsyncMock(side_effect=json.JSONDecodeError("torn session message", "{", 1)),
     )
+    processor = SessionCommitProcessor(SimpleNamespace(session=Mock(return_value=session)))
     queue = NamedQueue(
         backend,
         "/queue",
         "SessionCommit",
-        dequeue_handler=SessionCommitProcessor(
-            SimpleNamespace(session=lambda *args, **kwargs: session)
-        ),
-        task_work_index=index,
+        dequeue_handler=processor,
+        task_work_index=tracker._work_index,
     )
     msg = SessionCommitMsg(
-        task_id=task.task_id,
+        task_id=task_id,
         session_id="session-1",
         session_uri="viking://user/alice/sessions/session-1",
         archive_uri="viking://user/alice/sessions/session-1/history/archive_001",
@@ -277,15 +274,17 @@ async def test_fail_task(tracker: TaskTracker):
         {"id": "delivery-1", "data": payload}
     ).encode()
 
+    with monkeypatch.context() as patch:
+        patch.setattr(tracker._store, "create", AsyncMock(side_effect=OSError("store unavailable")))
+        await queue.dequeue()
+    assert f"{queue.path}/ack" not in backend.files
+
     await queue.dequeue()
 
-    retrieved = await tracker.get(task.task_id)
-    persisted = await tracker._store.get(task.task_id, **_owner_kwargs())
-    assert retrieved.status == TaskStatus.FAILED
+    persisted = await tracker._store.get(task_id, **_owner_kwargs())
     assert persisted["status"] == "failed"
     assert "torn session message" in persisted["error"]
     assert backend.files[f"{queue.path}/ack"] == b"delivery-1"
-    assert not index.has_work(task.task_id)
 
 
 async def test_mark_externally_cancelled_task_without_enabling_active_cancel(

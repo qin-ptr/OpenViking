@@ -21,6 +21,7 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
 from openviking.server.config import ToolOutputExternalizationConfig
+from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.extraction_batch import (
@@ -60,6 +61,7 @@ from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
 from openviking_cli.exceptions import (
     FailedPreconditionError,
+    InternalError,
     NotFoundError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -2170,15 +2172,6 @@ class Session:
                     queue_msg.to_dict(),
                 )
 
-                phase1_stage = "task_tracker_create"
-                await get_task_tracker().create(
-                    "session_commit",
-                    resource_id=self.session_id,
-                    account_id=self.ctx.account_id,
-                    user_id=self.ctx.user.user_id,
-                    task_id=task_id,
-                )
-
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
                 await self._write_to_agfs_async(messages=self._messages)
@@ -2231,6 +2224,25 @@ class Session:
 
         self._compression.original_count += len(messages_to_archive)
         logger.info(f"Archived: {len(messages_to_archive)} messages → {archive_uri}/")
+
+        # Registration must not hold the session lock or roll back published Phase 1.
+        try:
+            await get_task_tracker().create(
+                "session_commit",
+                resource_id=self.session_id,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                task_id=task_id,
+            )
+        except Exception as exc:
+            error = map_exception(exc) or InternalError(str(exc))
+            error.details.update(
+                task_id=task_id,
+                archive_uri=archive_uri,
+                archived=True,
+                stage="task_tracker_create",
+            )
+            raise error
 
         return {
             "session_id": self.session_id,
