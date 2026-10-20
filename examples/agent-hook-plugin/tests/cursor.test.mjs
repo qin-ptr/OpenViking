@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -44,6 +44,7 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
     "sessionStart",
     "beforeSubmitPrompt",
     "beforeReadFile",
+    "afterMCPExecution",
     "stop",
     "preCompact",
     "sessionEnd",
@@ -80,9 +81,10 @@ test("Cursor transcript parser keeps only user and assistant text", () => {
   ]);
 });
 
-test("Cursor injects recall before the request and Stop captures transcript deltas", async () => {
+test("Cursor captures text and completed OpenViking tools together before commit", async () => {
   const messages = [];
   const actorPeers = [];
+  const archives = [];
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
@@ -97,6 +99,7 @@ test("Cursor injects recall before the request and Stop captures transcript delt
         messages.push(...(parsed.messages ?? [parsed]));
         response.end(JSON.stringify({ result: { ok: true } }));
       } else if (request.url?.endsWith("/commit")) {
+        archives.push([...messages]);
         response.end(JSON.stringify({ result: { ok: true } }));
       } else {
         response.statusCode = 404;
@@ -110,6 +113,7 @@ test("Cursor injects recall before the request and Stop captures transcript delt
     HOME: root,
     OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
     OPENVIKING_HOOK_STATE_DIR: join(root, "state"),
+    OPENVIKING_PENDING_DIR: join(root, "pending"),
     OPENVIKING_MEMORY_ENABLED: "1",
   };
   try {
@@ -131,6 +135,34 @@ test("Cursor injects recall before the request and Stop captures transcript delt
       JSON.stringify({ role: "user", message: { content: [{ type: "text", text: "question" }] } }),
       JSON.stringify({ role: "assistant", message: { content: [{ type: "text", text: "answer" }] } }),
     ].join("\n"));
+    const experienceUri = "viking://~/memories/experiences/example.md";
+    const read = {
+      ...base,
+      transcript_path: transcript,
+      tool_use_id: "read-1",
+      mcp_server_name: "openviking",
+      tool_name: "read",
+      tool_input: JSON.stringify({ uris: experienceUri }),
+      result_json: JSON.stringify({ content: [{ type: "text", text: "experience body" }], isError: false }),
+    };
+    await Promise.all([
+      runHook("afterMCPExecution", read, env),
+      runHook("afterMCPExecution", read, env),
+    ]);
+    await runHook("afterMCPExecution", {
+      ...read, tool_use_id: "read-failed",
+      result_json: JSON.stringify({ content: [{ type: "text", text: "NOT_FOUND: missing" }], isError: true }),
+    }, env);
+    await runHook("afterMCPExecution", { ...read, tool_use_id: "other-server", mcp_server_name: "other" }, env);
+    await runHook("afterMCPExecution", { ...read, tool_use_id: "" }, env);
+    await runHook("afterMCPExecution", { ...read, tool_use_id: "no-result", result_json: "{}" }, env);
+    await runHook("afterMCPExecution", { ...read, tool_use_id: "disabled" }, { ...env, OPENVIKING_AUTO_CAPTURE: "0" });
+    await runHook("preCompact", { ...base, transcript_path: join(root, "missing.jsonl") }, env);
+    assert.equal(messages.length, 0, "tool completion only records locally");
+    assert.equal(archives.length, 0);
+    writeFileSync(transcript, `${readFileSync(transcript, "utf8")}\n${JSON.stringify({
+      role: "assistant", content: "Task finished after reading the experience.",
+    })}`);
     await Promise.all([
       runHook("stop", { ...base, transcript_path: transcript }, env),
       runHook("stop", { ...base, transcript_path: transcript }, env),
@@ -139,28 +171,56 @@ test("Cursor injects recall before the request and Stop captures transcript delt
     assert.deepEqual(messages, [
       { role: "user", content: "question", peer_id: "github.com-acme-cursor-project" },
       { role: "assistant", content: "answer", peer_id: "github.com-acme-cursor-project" },
+      {
+        role: "assistant", peer_id: "github.com-acme-cursor-project",
+        parts: [{
+          type: "tool", tool_id: "read-1", tool_name: "mcp__openviking__read",
+          tool_status: "completed", tool_input: { uris: experienceUri }, tool_output: read.result_json,
+        }],
+      },
+      {
+        role: "assistant", peer_id: "github.com-acme-cursor-project",
+        parts: [{
+          type: "tool", tool_id: "read-failed", tool_name: "mcp__openviking__read",
+          tool_status: "error", tool_input: { uris: experienceUri },
+          tool_output: JSON.stringify({ content: [{ type: "text", text: "NOT_FOUND: missing" }], isError: true }),
+        }],
+      },
+      { role: "assistant", content: "Task finished after reading the experience.", peer_id: "github.com-acme-cursor-project" },
     ]);
+    await runHook("afterMCPExecution", read, env);
+    await runHook("sessionEnd", { ...base, transcript_path: transcript }, env);
+    assert.equal(messages.length, 5, "a repeated completion after Stop is not captured twice");
+    assert.deepEqual(archives.at(-1), messages);
   } finally {
     server.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("Cursor replays offline capture on the next SessionStart", async () => {
+test("Cursor retries the unreported tail after a partial capture before committing", async () => {
   const messages = [];
+  const archives = [];
   let offline = true;
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", () => {
       if (request.url?.includes("/messages")) {
-        if (offline) {
+        if (offline && request.url.endsWith("/messages/batch")) {
+          response.statusCode = 404;
+          response.end(JSON.stringify({ status: "error" }));
+          return;
+        }
+        if (offline && messages.length > 0) {
           response.statusCode = 503;
           response.end(JSON.stringify({ status: "error", error: "offline" }));
           return;
         }
         const parsed = JSON.parse(body);
         messages.push(...(parsed.messages ?? [parsed]));
+      } else if (request.url?.endsWith("/commit")) {
+        archives.push([...messages]);
       }
       response.end(JSON.stringify({ result: { ok: true } }));
     });
@@ -183,19 +243,38 @@ test("Cursor replays offline capture on the next SessionStart", async () => {
     ].join("\n"));
     const input = { conversation_id: "cursor-offline", cwd: "/workspace", transcript_path: transcript };
 
-    await runHook("stop", input, env);
-    assert.equal(readdirSync(pendingDir).filter((name) => name.endsWith(".json")).length, 2);
+    const tool = {
+      ...input,
+      tool_use_id: "offline-read",
+      mcp_server_name: "openviking",
+      tool_name: "read",
+      tool_input: JSON.stringify({ uris: "viking://~/memories/experiences/offline.md" }),
+      result_json: JSON.stringify({ content: [{ type: "text", text: "offline experience" }], isError: false }),
+    };
+    await runHook("afterMCPExecution", tool, env);
+    await runHook("preCompact", input, env);
+    assert.equal(archives.length, 0, "commit must not overtake unreported messages");
+    assert.deepEqual(messages, [{ role: "user", content: "offline question" }]);
+    assert.equal(existsSync(pendingDir), false, "the local capture source owns retries");
 
     offline = false;
-    await runHook("sessionStart", input, env);
+    await runHook("preCompact", input, env);
     assert.deepEqual(messages, [
       { role: "user", content: "offline question" },
       { role: "assistant", content: "offline answer" },
+      {
+        role: "assistant",
+        parts: [{
+          type: "tool", tool_id: "offline-read", tool_name: "mcp__openviking__read",
+          tool_status: "completed", tool_input: JSON.parse(tool.tool_input), tool_output: tool.result_json,
+        }],
+      },
     ]);
-    assert.equal(readdirSync(pendingDir).filter((name) => name.endsWith(".json")).length, 0);
+    assert.deepEqual(archives, [messages]);
+    assert.equal(existsSync(pendingDir), false);
 
     await runHook("stop", input, env);
-    assert.equal(messages.length, 2, "captured hashes prevent replayed turns from being stored twice");
+    assert.equal(messages.length, 3, "acknowledged turns are not stored twice");
   } finally {
     server.close();
     rmSync(root, { recursive: true, force: true });

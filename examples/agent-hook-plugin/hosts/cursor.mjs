@@ -1,20 +1,81 @@
 import { readFile } from "node:fs/promises";
 
 import {
-  addAgentMessages,
   commitAgentSession,
   stableHash,
 } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { filterCaptureTurns, isCaptureEnabled } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import {
+  extractPartsFromPayload,
+  filterCaptureTurns,
+  isCaptureEnabled,
+  shapeCaptureParts,
+} from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { sendSessionMessages } from "../../memory-plugin-shared/lib/batch-send.mjs";
 import { denyCursorPermission, evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import { parseCursorTranscript } from "./cursor-transcript.mjs";
 
-async function captureTranscript(ctx, state) {
-  if (!isCaptureEnabled(ctx.cfg)) return { state, captured: 0 };
+async function readTranscript(ctx) {
   const transcriptPath = ctx.input.transcript_path || ctx.input.transcriptPath;
-  if (!transcriptPath) return { state, captured: 0 };
-  let turns = [];
-  try { turns = parseCursorTranscript(await readFile(transcriptPath, "utf8")); } catch { return { state, captured: 0 }; }
+  if (!transcriptPath) return null;
+  try { return parseCursorTranscript(await readFile(transcriptPath, "utf8")); } catch { return null; }
+}
+
+async function recordMcpResult(ctx, state) {
+  const input = ctx.input;
+  // The managed installation registers this exact server key. A tool named
+  // "read" on another MCP server must never become an OpenViking read.
+  if (input.mcp_server_name !== "openviking") return state;
+  if (typeof input.tool_use_id !== "string" || !input.tool_use_id.trim()
+    || typeof input.tool_name !== "string" || !input.tool_name.trim()) {
+    ctx.log("capture_skip", { reason: "missing_mcp_tool_identity" });
+    return state;
+  }
+  let toolInput, result;
+  try {
+    toolInput = JSON.parse(input.tool_input);
+    result = JSON.parse(input.result_json);
+  } catch {
+    ctx.log("capture_skip", { reason: "invalid_mcp_tool_json" });
+    return state;
+  }
+  if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)
+    || !result || typeof result !== "object" || Array.isArray(result)) {
+    ctx.log("capture_skip", { reason: "invalid_mcp_tool_payload" });
+    return state;
+  }
+  const failed = Boolean(result.isError || result.error || result.rejected || result.permissionDenied);
+  if (!failed && !Array.isArray(result.content)) {
+    ctx.log("capture_skip", { reason: "missing_mcp_tool_result" });
+    return state;
+  }
+  const hash = `tool:${input.tool_use_id}`;
+  const pending = state.pendingToolResults || [];
+  if (state.capturedHashes?.includes(hash) || pending.some((item) => item.hash === hash)) return state;
+  const parts = shapeCaptureParts(extractPartsFromPayload({
+    type: "tool_result",
+    tool_use_id: input.tool_use_id,
+    name: `mcp__openviking__${input.tool_name}`,
+    state: { input: toolInput, output: result },
+    is_error: failed,
+  }, { toolMaxChars: ctx.cfg.captureToolMaxChars }), "assistant", ctx.cfg).parts;
+  // Cursor's text transcript is not a durable source for tool results. Keep
+  // them in the existing session state until Stop hands them to the sender.
+  // The text position keeps each result next to the conversation that led to it.
+  return {
+    ...state,
+    pendingToolResults: [
+      ...pending,
+      { hash, afterTurn: (await readTranscript(ctx))?.length ?? null, parts },
+    ],
+  };
+}
+
+async function captureTranscript(ctx, state) {
+  const turns = await readTranscript(ctx);
+  if (!turns) {
+    ctx.log("capture_skip", { reason: "unreadable_transcript" });
+    return { state, complete: false };
+  }
   const capturedHashes = new Set(Array.isArray(state.capturedHashes) ? state.capturedHashes : []);
   const toSend = [];
   for (const [index, turn] of turns.entries()) {
@@ -31,17 +92,36 @@ async function captureTranscript(ctx, state) {
       capturedHashes.add(hash);
       continue;
     }
-    toSend.push({ hash, turn: kept[0] });
+    toSend.push({ hash, position: index * 2, turn: kept[0] });
   }
-  const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, toSend.map((item) => item.turn), ctx.peerId);
-  const captured = result.sent + result.queued;
-  for (const item of toSend.slice(0, captured)) capturedHashes.add(item.hash);
+  for (const item of state.pendingToolResults || []) {
+    if (capturedHashes.has(item.hash)) continue;
+    toSend.push({
+      hash: item.hash,
+      position: (item.afterTurn ?? turns.length) * 2 - 1,
+      turn: { role: "assistant", parts: item.parts },
+    });
+  }
+  toSend.sort((a, b) => a.position - b.position);
+  // The transcript and pendingToolResults own retries, as Codex's rollout
+  // does. Advance only after upload, without a second copy in the offline queue.
+  const payloads = toSend.map(({ turn }) => ({
+    ...turn,
+    ...(ctx.peerId ? { peer_id: ctx.peerId } : {}),
+  }));
+  const result = await sendSessionMessages(ctx.fetchJSON, ctx.sessionId, payloads);
+  const captured = result.sent;
+  const acknowledged = toSend.slice(0, captured);
+  for (const item of acknowledged) capturedHashes.add(item.hash);
   return {
     captured,
+    complete: captured === toSend.length,
     state: {
       ...state,
       capturedHashes: [...capturedHashes].slice(-1000),
-      capturedSinceCommit: Number(state.capturedSinceCommit || 0) + captured,
+      pendingToolResults: (state.pendingToolResults || []).filter((item) => !capturedHashes.has(item.hash)),
+      capturedSinceCommit: Number(state.capturedSinceCommit || 0)
+        + acknowledged.filter((item) => typeof item.turn.content === "string").length,
     },
   };
 }
@@ -51,6 +131,7 @@ export const cursor = {
   requestBudgets: {
     sessionStart: 25_000,
     beforeSubmitPrompt: 17_000,
+    afterMCPExecution: 2_000,
     stop: 25_000,
     preCompact: 25_000,
     sessionEnd: 25_000,
@@ -58,6 +139,7 @@ export const cursor = {
   stages: {
     sessionStart: "start",
     beforeSubmitPrompt: "prompt",
+    afterMCPExecution: "capture",
     stop: "capture",
     preCompact: "capture",
     sessionEnd: "capture",
@@ -78,13 +160,16 @@ export const cursor = {
   },
   prompt: (input) => (typeof input.prompt === "string" ? input.prompt.trim() : ""),
   async capture(ctx, state, event) {
-    const { state: next } = await captureTranscript(ctx, state);
+    if (!isCaptureEnabled(ctx.cfg)) return state;
+    if (event === "afterMCPExecution") return recordMcpResult(ctx, state);
+    const { state: next, complete } = await captureTranscript(ctx, state);
+    if (!complete) return next;
     // Only a plain Stop waits for the threshold: a compaction or a session end
     // is the last chance this transcript has to reach the server.
     const shouldCommit = event !== "stop" || next.capturedSinceCommit >= ctx.cfg.commitTurnThreshold;
     if (shouldCommit) {
       const result = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
-      if (result.ok) next.capturedSinceCommit = 0;
+      if (result.ok || result.pendingQueued) next.capturedSinceCommit = 0;
     }
     return next;
   },
