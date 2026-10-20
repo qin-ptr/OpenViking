@@ -1,4 +1,4 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, open, readFile } from "node:fs/promises";
 
 import {
   commitAgentSession,
@@ -61,24 +61,43 @@ async function recordMcpResult(ctx) {
   await appendFile(`${ctx.stateFile}.tools.jsonl`, `${JSON.stringify(record)}\n`, { mode: 0o600 });
 }
 
+async function readToolRecords(ctx, offset) {
+  let file;
+  let tail;
+  try {
+    file = await open(`${ctx.stateFile}.tools.jsonl`, "r");
+    const { size } = await file.stat();
+    if (offset > size) throw new Error("Cursor tool log is shorter than its capture checkpoint");
+    tail = Buffer.alloc(size - offset);
+    for (let position = 0; position < tail.length;) {
+      const { bytesRead } = await file.read(tail, position, tail.length - position, offset + position);
+      if (!bytesRead) throw new Error("Cursor tool log ended before its recorded size");
+      position += bytesRead;
+    }
+  } catch (error) {
+    if (error.code === "ENOENT" && offset === 0) return [];
+    throw error;
+  } finally {
+    await file?.close();
+  }
+  if (tail.length && tail.at(-1) !== 10) throw new Error("Cursor tool log has an incomplete record");
+  return tail.toString("utf8").split("\n").slice(0, -1).map((line) => {
+    offset += Buffer.byteLength(line, "utf8") + 1;
+    return { ...JSON.parse(line), endOffset: offset };
+  });
+}
+
 async function captureTranscript(ctx, state) {
   const turns = await readTranscript(ctx);
   if (!turns) {
     ctx.log("capture_skip", { reason: "unreadable_transcript" });
     return { state, complete: false };
   }
-  let toolLog = "";
-  try {
-    toolLog = await readFile(`${ctx.stateFile}.tools.jsonl`, "utf8");
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  const toolRecords = toolLog.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  let capturedToolCount = state.capturedToolCount || 0;
-  if (capturedToolCount > toolRecords.length) throw new Error("Cursor tool log is shorter than its capture checkpoint");
-  // The log is the source of call IDs, including already accepted records.
-  // Rebuild this set at Stop, never by rereading result bodies on each callback.
-  const acceptedToolIds = new Set(toolRecords.slice(0, capturedToolCount).map((item) => item.part.tool_id));
+  let capturedToolOffset = state.capturedToolOffset || 0;
+  const toolRecords = await readToolRecords(ctx, capturedToolOffset);
+  // Keep acknowledgement identities in the checkpoint, so an old completion
+  // can be deduplicated without rereading its result body.
+  const acceptedToolIds = new Set(state.capturedToolIds || []);
   const seenToolIds = new Set(acceptedToolIds);
   const capturedHashes = new Set(Array.isArray(state.capturedHashes) ? state.capturedHashes : []);
   const toSend = [];
@@ -99,7 +118,7 @@ async function captureTranscript(ctx, state) {
     toSend.push({ hash, position: index * 2, turn: kept[0] });
   }
   let toolPosition = -1;
-  for (const item of toolRecords.slice(capturedToolCount)) {
+  for (const item of toolRecords) {
     if (seenToolIds.has(item.part.tool_id)) continue;
     seenToolIds.add(item.part.tool_id);
     // Preserve tool-log order even when compaction shortened the text source.
@@ -124,15 +143,18 @@ async function captureTranscript(ctx, state) {
     if (item.toolId) acceptedToolIds.add(item.toolId);
     else capturedHashes.add(item.hash);
   }
-  while (capturedToolCount < toolRecords.length
-    && acceptedToolIds.has(toolRecords[capturedToolCount].part.tool_id)) capturedToolCount++;
+  for (const item of toolRecords) {
+    if (!acceptedToolIds.has(item.part.tool_id)) break;
+    capturedToolOffset = item.endOffset;
+  }
   return {
     captured,
     complete: captured === toSend.length,
     state: {
       ...state,
       capturedHashes: [...capturedHashes].slice(-1000),
-      capturedToolCount,
+      capturedToolOffset,
+      capturedToolIds: [...acceptedToolIds],
       capturedSinceCommit: Number(state.capturedSinceCommit || 0)
         + acknowledged.filter((item) => typeof item.turn.content === "string").length,
     },

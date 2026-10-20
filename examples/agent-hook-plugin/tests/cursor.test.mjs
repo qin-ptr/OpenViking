@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,11 +71,32 @@ test("Cursor URI guard lets a shell command routed by an older install run", () 
   }), {});
 });
 
-test("Cursor does not replay text when tool calls exceed the text dedup window", async () => {
+test("Cursor captures a busy session without replaying text or rereading uploaded tool bodies", async () => {
   const root = mkdtempSync(join(tmpdir(), "openviking-cursor-history-"));
   const transcript = join(root, "transcript.jsonl");
   const messages = [];
   let commits = 0;
+  let toolReadBytes = 0;
+  const originalReadFile = fs.readFile;
+  const originalOpen = fs.open;
+  fs.readFile = async (path, ...args) => {
+    const data = await originalReadFile(path, ...args);
+    if (String(path).endsWith(".tools.jsonl")) toolReadBytes += Buffer.byteLength(data);
+    return data;
+  };
+  fs.open = async (path, ...args) => {
+    const file = await originalOpen(path, ...args);
+    if (String(path).endsWith(".tools.jsonl")) {
+      const read = file.read.bind(file);
+      file.read = async (...args) => {
+        const result = await read(...args);
+        toolReadBytes += result.bytesRead;
+        return result;
+      };
+    }
+    return file;
+  };
+  syncBuiltinESMExports();
   const ctx = {
     cfg: { enabled: true, autoCapture: true, commitTurnThreshold: 8 },
     sessionId: "cu-history",
@@ -91,7 +114,7 @@ test("Cursor does not replay text when tool calls exceed the text dedup window",
     mcp_server_name: "openviking",
     tool_name: "read",
     tool_input: JSON.stringify({ uris: "viking://~/memories/experiences/example.md" }),
-    result_json: JSON.stringify({ content: [{ type: "text", text: "experience body" }], isError: false }),
+    result_json: JSON.stringify({ content: [{ type: "text", text: `${"x".repeat(19996)}部署经验` }], isError: false }),
   };
   let state = {};
   const lines = [];
@@ -112,6 +135,11 @@ test("Cursor does not replay text when tool calls exceed the text dedup window",
     assert.equal(messages.filter((message) => typeof message.content === "string").length, 120);
     assert.equal(messages.filter((message) => message.parts).length, 900);
     assert.equal(commits, 15);
+    const readBeforeEmptyStop = toolReadBytes;
+    assert.equal(toolReadBytes, statSync(`${ctx.stateFile}.tools.jsonl`).size,
+      "each tool-result byte should be read once across all rounds");
+    state = await cursor.capture(ctx, state, "stop");
+    assert.equal(toolReadBytes, readBeforeEmptyStop, "empty Stop must not read tool-result bodies");
 
     // An old completion can be delivered again after its result was accepted.
     ctx.input = { ...tool, tool_use_id: "0-0" };
@@ -121,7 +149,12 @@ test("Cursor does not replay text when tool calls exceed the text dedup window",
     await cursor.capture(ctx, state, "stop");
     assert.equal(messages.length, 1020, "empty Stop must not resend accepted text or tools");
     assert.equal(commits, 15, "duplicate capture must not advance the commit threshold");
+    assert.equal(toolReadBytes, statSync(`${ctx.stateFile}.tools.jsonl`).size,
+      "a repeated completion only reads the newly appended record");
   } finally {
+    fs.readFile = originalReadFile;
+    fs.open = originalOpen;
+    syncBuiltinESMExports();
     rmSync(root, { recursive: true, force: true });
   }
 });

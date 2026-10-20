@@ -41,7 +41,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 工具采集要求 `afterMCPExecution` 提供 `tool_use_id`、`mcp_server_name`、`tool_name`、`tool_input` 和 `result_json`。缺少身份或结果的事件会跳过，不会推断为成功。上传失败时保留本地记录，等待同一会话的后续采集重试；消息未传完整时不提交。
 
-工具日志与会话状态文件放在同一目录，保留该会话的工具记录和调用 ID。Stop 按调用 ID 去重，收到确认后才推进独立的工具上传位置；工具调用不占用文本的去重额度。
+工具日志与会话状态文件放在同一目录。Stop 只读取尚未确认的日志尾部；状态文件保留字节位置和已确认的调用 ID，去重时不需要重读旧结果正文。收到确认后才推进上传位置，工具调用不占用文本的去重额度。
 
 skill 清单先列你自己的 skill，再列账号内共享的 skill；共享 skill 与你自己的 skill 重名时不列出。每条描述截到约 40 token。清单有独立的 token 预算 `skillCatalogTokenBudget`（默认 `1200`），不占用画像预算。描述放不下时只列名称，名称也列不全时末尾附 `... +N more`；连一个名称都放不下时，只写一行 skill 数量。把 `skillCatalog` 设为 `false` 或把预算设为 `0` 即可关闭，既可以写在 `~/.openviking/ovcli.conf` 的 `plugin` 或 `plugin.cursor` 段（见[插件配置](../configuration/02-client.md#插件配置)），也可以用环境变量 `OPENVIKING_SKILL_CATALOG` 和 `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`。没有任何 skill，或服务端不提供 `GET /api/v1/skills` 时，不注入这份清单。
 
