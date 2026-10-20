@@ -35,11 +35,13 @@ Quit Cursor completely and restart it after installation.
 - `sessionStart` loads your profile, the current project's memory index, and an `<available-skills>` catalog of your OpenViking skills.
 - `beforeSubmitPrompt` recalls context for the current request, including your own skills and those shared with your account under `viking://agent/skills`, and injects it through `additional_context`.
 - `beforeReadFile` denies reading a `viking://` path as a local file and points the Agent to OpenViking MCP tools. Shell commands are not checked.
-- `afterMCPExecution` stores completed calls to the `openviking` MCP server in local session state, preserving the native call ID, input, output, and success or failure status. It does not upload messages.
+- `afterMCPExecution` appends completed calls to the `openviking` MCP server to a local tool log, preserving the native call ID, input, output, and success or failure status. It does not upload messages or rewrite earlier results.
 - `stop` uploads new conversation turns and locally recorded tool results through `add message`. Capture progress advances only after upload succeeds, and `session commit` follows the existing message threshold. Tool records do not add to that threshold's message count.
 - `preCompact` and `sessionEnd` commit pending messages for memory extraction.
 
 Tool capture requires `afterMCPExecution` to provide `tool_use_id`, `mcp_server_name`, `tool_name`, `tool_input`, and `result_json`. Events without an identity or result are skipped, never inferred to be successful. Failed uploads remain local for the same conversation's next capture attempt; incomplete capture prevents a commit.
+
+The tool log stays beside the session checkpoint as the source of tool records and call IDs. Stop deduplicates repeated IDs and advances a separate tool-upload position only after acknowledgement; tool calls do not consume the text deduplication window.
 
 The skill catalog lists your own skills first, then those shared with your account, leaving out a shared skill whose name you also own; each description is cut to about 40 tokens. It has its own token budget, `skillCatalogTokenBudget` (default `1200`), separate from the profile budget. When not every description fits, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, it shrinks to a one-line skill count. Set `skillCatalog` to `false` or the budget to `0` to turn it off, either in the `plugin` or `plugin.cursor` section of `~/.openviking/ovcli.conf` ([Plugin Settings](../configuration/02-client.md#plugin-settings)) or through `OPENVIKING_SKILL_CATALOG` and `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`. Without any skills, or on a server without `GET /api/v1/skills`, the catalog is left out.
 

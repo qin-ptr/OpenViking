@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { expectExit, runHookScript } from "../../memory-plugin-shared/testing/support.mjs";
-import { parseCursorTranscript } from "../hosts/cursor-transcript.mjs";
+import { cursor } from "../hosts/cursor.mjs";
 import { evaluateHostUriGuard } from "../scripts/uri-guard.mjs";
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -69,16 +69,61 @@ test("Cursor URI guard lets a shell command routed by an older install run", () 
   }), {});
 });
 
-test("Cursor transcript parser keeps only user and assistant text", () => {
-  const raw = [
-    JSON.stringify({ role: "user", message: { content: [{ type: "text", text: "question" }] } }),
-    JSON.stringify({ role: "assistant", message: { content: [{ type: "text", text: "answer [REDACTED]" }, { type: "tool_use", name: "Read" }] } }),
-    JSON.stringify({ type: "turn_ended", status: "success" }),
-  ].join("\n");
-  assert.deepEqual(parseCursorTranscript(raw), [
-    { role: "user", content: "question" },
-    { role: "assistant", content: "answer" },
-  ]);
+test("Cursor does not replay text when tool calls exceed the text dedup window", async () => {
+  const root = mkdtempSync(join(tmpdir(), "openviking-cursor-history-"));
+  const transcript = join(root, "transcript.jsonl");
+  const messages = [];
+  let commits = 0;
+  const ctx = {
+    cfg: { enabled: true, autoCapture: true, commitTurnThreshold: 8 },
+    sessionId: "cu-history",
+    stateFile: join(root, "state.json"),
+    peerId: "",
+    log: () => {},
+    fetchJSON: async (path, request) => {
+      if (path.endsWith("/messages/batch")) messages.push(...JSON.parse(request.body).messages);
+      if (path.endsWith("/commit")) commits++;
+      return { ok: true };
+    },
+  };
+  const tool = {
+    transcript_path: transcript,
+    mcp_server_name: "openviking",
+    tool_name: "read",
+    tool_input: JSON.stringify({ uris: "viking://~/memories/experiences/example.md" }),
+    result_json: JSON.stringify({ content: [{ type: "text", text: "experience body" }], isError: false }),
+  };
+  let state = {};
+  const lines = [];
+  try {
+    for (let round = 0; round < 60; round++) {
+      lines.push(
+        JSON.stringify({ role: "user", content: `Question in round ${round}` }),
+        JSON.stringify({ role: "assistant", content: `Answer in round ${round}` }),
+      );
+      writeFileSync(transcript, lines.join("\n"));
+      for (let call = 0; call < 15; call++) {
+        ctx.input = { ...tool, tool_use_id: `${round}-${call}` };
+        await cursor.capture(ctx, state, "afterMCPExecution");
+      }
+      ctx.input = { transcript_path: transcript };
+      state = await cursor.capture(ctx, state, "stop");
+    }
+    assert.equal(messages.filter((message) => typeof message.content === "string").length, 120);
+    assert.equal(messages.filter((message) => message.parts).length, 900);
+    assert.equal(commits, 15);
+
+    // An old completion can be delivered again after its result was accepted.
+    ctx.input = { ...tool, tool_use_id: "0-0" };
+    await cursor.capture(ctx, state, "afterMCPExecution");
+    ctx.input = { transcript_path: transcript };
+    state = await cursor.capture(ctx, state, "stop");
+    await cursor.capture(ctx, state, "stop");
+    assert.equal(messages.length, 1020, "empty Stop must not resend accepted text or tools");
+    assert.equal(commits, 15, "duplicate capture must not advance the commit threshold");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Cursor captures text and completed OpenViking tools together before commit", async () => {
@@ -212,7 +257,7 @@ test("Cursor retries the unreported tail after a partial capture before committi
           response.end(JSON.stringify({ status: "error" }));
           return;
         }
-        if (offline && messages.length > 0) {
+        if (offline && messages.length >= 3) {
           response.statusCode = 503;
           response.end(JSON.stringify({ status: "error", error: "offline" }));
           return;
@@ -252,9 +297,12 @@ test("Cursor retries the unreported tail after a partial capture before committi
       result_json: JSON.stringify({ content: [{ type: "text", text: "offline experience" }], isError: false }),
     };
     await runHook("afterMCPExecution", tool, env);
+    await runHook("afterMCPExecution", tool, env);
+    await runHook("afterMCPExecution", { ...tool, tool_use_id: "offline-read-2" }, env);
     await runHook("preCompact", input, env);
     assert.equal(archives.length, 0, "commit must not overtake unreported messages");
-    assert.deepEqual(messages, [{ role: "user", content: "offline question" }]);
+    assert.equal(messages.length, 3);
+    assert.equal(messages[2].parts[0].tool_id, "offline-read");
     assert.equal(existsSync(pendingDir), false, "the local capture source owns retries");
 
     offline = false;
@@ -269,12 +317,19 @@ test("Cursor retries the unreported tail after a partial capture before committi
           tool_status: "completed", tool_input: JSON.parse(tool.tool_input), tool_output: tool.result_json,
         }],
       },
+      {
+        role: "assistant",
+        parts: [{
+          type: "tool", tool_id: "offline-read-2", tool_name: "mcp__openviking__read",
+          tool_status: "completed", tool_input: JSON.parse(tool.tool_input), tool_output: tool.result_json,
+        }],
+      },
     ]);
     assert.deepEqual(archives, [messages]);
     assert.equal(existsSync(pendingDir), false);
 
     await runHook("stop", input, env);
-    assert.equal(messages.length, 3, "acknowledged turns are not stored twice");
+    assert.equal(messages.length, 4, "acknowledged turns are not stored twice");
   } finally {
     server.close();
     rmSync(root, { recursive: true, force: true });

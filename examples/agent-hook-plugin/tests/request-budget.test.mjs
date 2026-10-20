@@ -96,6 +96,7 @@ test("a capture timeout retains its cursor and does not commit incomplete captur
     cfg,
     input: { transcript_path: transcript },
     sessionId: "cu-budget",
+    stateFile: join(dir, "budget.json"),
     fetchJSON: withRequestBudget(fetchJSON, 1500, cfg.timeoutMs),
     peerId: "",
     log: () => {},
