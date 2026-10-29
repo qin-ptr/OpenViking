@@ -3516,10 +3516,10 @@ async def test_migration_endpoint_is_root_only_and_unsupported(
 
     for payload in (None, {"action": "migrate"}, {"action": "cleanup"}):
         response = await lightweight_admin_client.post(url, headers=root_headers(), json=payload)
-        assert response.status_code == 501
+        assert response.status_code == 400
         body = response.json()
         assert body["status"] == "error"
-        assert body["error"]["code"] == "UNIMPLEMENTED"
+        assert body["error"]["code"] == "INVALID_ARGUMENT"
         assert body["error"]["message"] == "Data migration is not currently supported."
         assert body.get("result") is None
 

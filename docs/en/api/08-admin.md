@@ -2046,8 +2046,8 @@ the request is in progress, the command exits with an error and keeps the return
 ### Reserved migration endpoint
 
 `POST /api/v1/admin/migrate` is reserved for future migration operations. It requires
-ROOT authentication and currently returns `501 Not Implemented` with error code
-`UNIMPLEMENTED` and message `Data migration is not currently supported.`
+ROOT authentication and currently returns `400 Bad Request` with error code
+`INVALID_ARGUMENT` and message `Data migration is not currently supported.`
 
 No migration parameters are currently supported. Sending the previous
 `{"action":"migrate"}` or `{"action":"cleanup"}` body also returns this error.

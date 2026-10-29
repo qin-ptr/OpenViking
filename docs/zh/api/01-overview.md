@@ -509,7 +509,7 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 删除记忆模板覆盖，恢复部署默认值 |
 | POST | `/api/v1/admin/accounts` | 创建账号及首个管理员 |
 | GET | `/api/v1/admin/accounts` | 列出账号 |
-| POST | `/api/v1/admin/migrate` | 预留迁移入口；仅 ROOT 可调用，当前返回 501 UNIMPLEMENTED |
+| POST | `/api/v1/admin/migrate` | 预留迁移入口；仅 ROOT 可调用，当前返回 400 INVALID_ARGUMENT |
 | GET | `/api/v1/admin/accounts/{account_id}` | 获取单个账号的无凭据元数据 |
 | DELETE | `/api/v1/admin/accounts/{account_id}` | 删除账号 |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
