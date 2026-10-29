@@ -81,7 +81,7 @@ CodeBuddy Code 集成是 `agent-hook-plugin` 的宿主适配器：复用共享�
 - **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
 - **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。宿主自动生成的续写轮次会被跳过，因此宿主自己产生的轮次不会触发检索。
 - **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
-- **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 捕获到新消息时提交。
+- **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。
 
 插件 manifest 还把 OpenViking MCP 服务以 stdio 代理的形式暴露出来，走同一份解析后的配置，并附带 `openviking-memory`、`openviking-skills`、`ov-experience-memory` 三个 skill。hook 与 MCP 读取同一份凭据，不会在服务端、账号或用户上各说各话。与其他社区适配器一致，v1 不支持子代理采集：宿主会触发 `SubagentStart`/`SubagentStop`，但共享 dispatcher 目前还没有子代理阶段。
 

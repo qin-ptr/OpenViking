@@ -84,7 +84,7 @@ The CodeBuddy Code integration is an `agent-hook-plugin` host adapter. It reuses
 - **SessionStart** injects the user profile and replays anything the offline queue is holding.
 - **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`. Host-generated continuation turns are skipped, so a turn the host produced on its own never triggers a search.
 - **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. Shell commands are not checked, so `ov` invocations and literal `viking://` arguments still work.
-- **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit when they capture new messages.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.
 
 The plugin manifest also exposes the OpenViking MCP server as a stdio proxy onto the same resolved configuration, and ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills. Hooks and MCP read the same credentials, so they cannot disagree about the server, account, or user. Subagent capture is not supported in v1, as on the other community adapters: the host fires `SubagentStart`/`SubagentStop`, but the shared dispatcher has no subagent stage yet.
 
