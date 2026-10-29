@@ -443,7 +443,7 @@ async def test_complete_task_updates_resource_id(tracker: TaskTracker):
 
 
 async def test_task_result_redacts_user_key(tracker: TaskTracker):
-    task = await tracker.create("legacy_migration", **_owner_kwargs())
+    task = await tracker.create("admin_reindex", **_owner_kwargs())
     await tracker.complete(
         task.task_id,
         {

@@ -33,14 +33,6 @@ from openviking.server.user_config import (
     write_user_config,
     write_user_memory_policy,
 )
-from openviking.service.legacy_migration import LegacyDataMigration
-from openviking.service.task_store import (
-    SYSTEM_TASK_ACCOUNT_ID,
-    SYSTEM_TASK_USER_ID,
-)
-from openviking.service.task_tracker import (
-    get_task_tracker,
-)
 from openviking.session.memory.account_templates import (
     EDITABLE_MEMORY_TEMPLATE_FIELDS,
     default_memory_template,
@@ -94,10 +86,6 @@ class CreateGroupRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     group_id: str
-
-
-class MigrateLegacyDataRequest(BaseModel):
-    action: str = "migrate"
 
 
 class SetAgentEvolutionRequest(BaseModel):
@@ -424,28 +412,6 @@ def _user_settings_result(
     }
 
 
-async def _run_legacy_migration_task(
-    task_id: str,
-    migration: LegacyDataMigration,
-    *,
-    action: str,
-    account_id: str,
-    user_id: str,
-) -> None:
-    tracker = get_task_tracker()
-    await tracker.start(task_id, account_id=account_id, user_id=user_id, stage="running")
-    try:
-        if action == "cleanup":
-            result = await migration.cleanup()
-        else:
-            result = await migration.run()
-    except Exception as exc:
-        await tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
-        logger.exception("Legacy %s task %s failed", action, task_id)
-        return
-    await tracker.complete(task_id, result, account_id=account_id, user_id=user_id)
-
-
 # ---- Account endpoints ----
 
 
@@ -535,56 +501,6 @@ async def get_account(
     if account is None:
         raise NotFoundError(account_id, "account")
     return Response(status="ok", result=account)
-
-
-@router.post("/migrate")
-@require_auth_root
-async def migrate_legacy_data(
-    request: Request,
-    body: MigrateLegacyDataRequest | None = None,
-    ctx: RequestContext = Depends(get_request_context),
-):
-    """Preflight and enqueue legacy session data migration or cleanup."""
-    manager = _get_api_key_manager(request)
-    service = get_service()
-    if service.viking_fs is None:
-        raise FailedPreconditionError("OpenViking service is not initialized.")
-    action = (body.action if body else "migrate").strip().lower()
-    if action not in {"migrate", "cleanup"}:
-        raise InvalidArgumentError("Migration action must be 'migrate' or 'cleanup'.")
-
-    migration = LegacyDataMigration(
-        viking_fs=service.viking_fs,
-        api_key_manager=manager,
-        service=service,
-    )
-    if action == "migrate":
-        plan = await migration.preflight()
-        if plan.errors:
-            raise FailedPreconditionError(
-                "Legacy migration preflight failed.",
-                details=plan.to_preflight_result(),
-            )
-
-    tracker = get_task_tracker()
-    task_type = "legacy_cleanup" if action == "cleanup" else "legacy_migration"
-    resource_id = "legacy-data-cleanup" if action == "cleanup" else "legacy-data"
-    task = await tracker.create(
-        task_type,
-        resource_id=resource_id,
-        account_id=SYSTEM_TASK_ACCOUNT_ID,
-        user_id=SYSTEM_TASK_USER_ID,
-    )
-    asyncio.create_task(
-        _run_legacy_migration_task(
-            task.task_id,
-            migration,
-            action=action,
-            account_id=SYSTEM_TASK_ACCOUNT_ID,
-            user_id=SYSTEM_TASK_USER_ID,
-        )
-    )
-    return Response(status="ok", result={"task_id": task.task_id})
 
 
 @router.delete("/accounts/{account_id}", status_code=202)

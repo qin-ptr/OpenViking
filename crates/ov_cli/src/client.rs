@@ -1889,15 +1889,6 @@ impl HttpClient {
         self.delete(&path, &[]).await
     }
 
-    pub async fn admin_migrate(&self, cleanup: bool) -> Result<Value> {
-        let action = if cleanup { "cleanup" } else { "migrate" };
-        self.post(
-            "/api/v1/admin/migrate",
-            &serde_json::json!({ "action": action }),
-        )
-        .await
-    }
-
     // ============ Debug Vector Methods ============
 
     /// Get paginated vector records

@@ -2198,11 +2198,6 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        action = "cleanup" if cleanup else "migrate"
-        response = await self._request("POST", "/api/v1/admin/migrate", json={"action": action})
-        return self._handle_response(response)
-
     async def admin_get_agent_evolution(self) -> Dict[str, Any]:
         """Return the effective Agent Evolution switch for the caller's account."""
         response = await self._request("GET", "/api/v1/admin/agent-evolution")
@@ -3323,9 +3318,6 @@ class SyncHTTPClient:
         return run_async(
             self._async_client.admin_remove_group_member(account_id, group_id, user_id)
         )
-
-    def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_migrate(cleanup=cleanup))
 
     def admin_get_agent_evolution(self) -> Dict[str, Any]:
         return run_async(self._async_client.admin_get_agent_evolution())

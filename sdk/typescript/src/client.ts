@@ -1343,12 +1343,6 @@ export class OpenVikingClient {
       { body: seed === undefined ? undefined : { seed } },
     );
   }
-  /** Start legacy-data migration or cleanup. */
-  adminMigrate(cleanup = false): Promise<JsonObject> {
-    return this.request("POST", "/api/v1/admin/migrate", {
-      body: { action: cleanup ? "cleanup" : "migrate" },
-    });
-  }
   /** Return the effective Agent Evolution switch for the caller's account. */
   adminGetAgentEvolution(): Promise<JsonObject> {
     return this.request("GET", "/api/v1/admin/agent-evolution");

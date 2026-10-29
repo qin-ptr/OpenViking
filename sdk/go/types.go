@@ -521,11 +521,6 @@ type ImportPackOptions struct {
 	VectorMode string
 }
 
-// AdminMigrateOptions controls AdminMigrate.
-type AdminMigrateOptions struct {
-	Cleanup bool
-}
-
 // FindResult is the structured retrieval response returned by Find and Search.
 type FindResult struct {
 	Memories     []MatchedContext `json:"memories,omitempty"`
