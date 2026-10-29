@@ -7,9 +7,11 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
-- **Legacy session migration removed (breaking change)**: Removed
-  `POST /api/v1/admin/migrate`, `ov admin migrate` (including `--cleanup`), and the
-  corresponding Python, TypeScript, and Go SDK methods. New releases no longer
+- **Legacy session migration removed (breaking change)**: Removed the legacy
+  implementation, `ov admin migrate` (including `--cleanup`), and the corresponding
+  Python, TypeScript, and Go SDK methods. The ROOT-only `POST /api/v1/admin/migrate`
+  endpoint remains reserved and currently returns `501 / UNIMPLEMENTED` without
+  creating a task. New releases no longer
   provide migration or cleanup of legacy 0.3.x sessions; upgrading does not move or
   delete those old directories. Migrated sessions and normal session operations
   are unaffected.

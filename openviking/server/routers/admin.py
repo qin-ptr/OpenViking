@@ -47,6 +47,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
+    UnimplementedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
@@ -501,6 +502,16 @@ async def get_account(
     if account is None:
         raise NotFoundError(account_id, "account")
     return Response(status="ok", result=account)
+
+
+@router.post("/migrate", status_code=501)
+@require_auth_root
+async def migrate_data(
+    request: Request,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Reserve the ROOT migration endpoint without running a migration."""
+    raise UnimplementedError("Data migration is not currently supported.")
 
 
 @router.delete("/accounts/{account_id}", status_code=202)

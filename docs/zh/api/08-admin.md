@@ -1895,6 +1895,25 @@ CLI 在请求轮换前检查能否准备替换文件。如果服务端已换钥�
 
 ---
 
+### 预留迁移入口
+
+`POST /api/v1/admin/migrate` 为后续迁移需求保留，仅 ROOT 可调用。当前返回
+`501 Not Implemented`，错误码为 `UNIMPLEMENTED`，错误消息为
+`Data migration is not currently supported.`（当前不支持数据迁移）。
+
+当前没有支持的迁移参数。传入原来的 `{"action":"migrate"}` 或
+`{"action":"cleanup"}` 也返回上述错误，不创建任务，不读写迁移数据。
+未认证请求返回 `401`；已认证的 ADMIN 或 USER 请求返回 `403`。
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/migrate \
+  -H "X-API-Key: <root-key>"
+```
+
+旧 `ov admin migrate` 命令和对应 SDK 方法已移除。
+
+---
+
 <a id="用户添加位置设置"></a>
 
 ## 完整示例

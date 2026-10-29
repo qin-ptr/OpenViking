@@ -3504,6 +3504,33 @@ async def test_no_auth_admin_api_returns_401(admin_client: httpx.AsyncClient):
     assert resp.status_code == 401
 
 
+async def test_migration_endpoint_is_root_only_and_unsupported(
+    lightweight_admin_app, lightweight_admin_client
+):
+    """The reserved endpoint rejects migration without relaxing ROOT authentication."""
+    from openviking.server.auth import get_request_context
+
+    url = "/api/v1/admin/migrate"
+    response = await lightweight_admin_client.post(url)
+    assert response.status_code == 401
+
+    for payload in (None, {"action": "migrate"}, {"action": "cleanup"}):
+        response = await lightweight_admin_client.post(url, headers=root_headers(), json=payload)
+        assert response.status_code == 501
+        body = response.json()
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "UNIMPLEMENTED"
+        assert body["error"]["message"] == "Data migration is not currently supported."
+        assert body.get("result") is None
+
+    for role in (Role.ADMIN, Role.USER):
+        lightweight_admin_app.dependency_overrides[get_request_context] = lambda role=role: (
+            RequestContext(user=UserIdentifier("default", "default"), role=role)
+        )
+        response = await lightweight_admin_client.post(url)
+        assert response.status_code == 403
+
+
 async def test_session_storage_uses_canonical_uri(
     admin_service: OpenVikingService,
 ):
